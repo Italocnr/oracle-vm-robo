@@ -23,7 +23,7 @@ jobs:
     # 55 min de tentativas + instalacao + espera a VM ficar RUNNING se der certo.
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Instalar OCI CLI
         run: pipx install oci-cli
@@ -38,7 +38,21 @@ jobs:
           SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
           mkdir -p ~/.oci
-          printf '%s\n' "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          if grep -q "BEGIN PUBLIC KEY" <<< "$OCI_KEY"; then
+            echo "::error::OCI_KEY contem a chave PUBLICA. Use o arquivo baixado em 'Download private key'."
+            exit 2
+          fi
+          # Guarda so o bloco BEGIN...END (sem \r do Windows nem texto em volta)
+          # e acrescenta o rotulo OCI_API_KEY que a Oracle recomenda.
+          printf '%s\n' "$OCI_KEY" | tr -d '\r' \
+            | sed -n '/-----BEGIN .*PRIVATE KEY-----/,/-----END .*PRIVATE KEY-----/p' \
+            > ~/.oci/oci_api_key.pem
+          if [ ! -s ~/.oci/oci_api_key.pem ]; then
+            echo "::error::OCI_KEY nao tem um bloco '-----BEGIN ... PRIVATE KEY-----'. Cole o conteudo inteiro do .pem."
+            exit 2
+          fi
+          echo "Chave: $(head -1 ~/.oci/oci_api_key.pem), $(wc -l < ~/.oci/oci_api_key.pem) linhas"
+          echo "OCI_API_KEY" >> ~/.oci/oci_api_key.pem
           cat > ~/.oci/config <<EOF
           [DEFAULT]
           user=$OCI_USER
