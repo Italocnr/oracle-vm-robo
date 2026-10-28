@@ -31,7 +31,13 @@ avisar() {
     [ -n "$NTFY_TOPIC" ] && curl -s -d "$1" "https://ntfy.sh/$NTFY_TOPIC" > /dev/null
 }
 
+SUBNET_ID="$(tr -d '[:space:]' <<< "$SUBNET_ID")"
 [ -z "$SUBNET_ID" ] && { log "SUBNET_ID nao definido em ~/criar-vm.env"; exit 2; }
+[[ "$SUBNET_ID" == ocid1.subnet.* ]] || {
+    log "SUBNET_ID nao e o OCID de uma subnet (comeca com '${SUBNET_ID:0:12}...', esperado 'ocid1.subnet.')."
+    log "Copie o OCID da 'public subnet' dentro da VCN, nao o da VCN."
+    exit 2
+}
 [ -f "$CHAVE_SSH" ] || { log "Chave SSH publica nao encontrada em $CHAVE_SSH"; exit 2; }
 [ -f "$PASTA/cloud-init.sh" ] || { log "cloud-init.sh nao encontrado em $PASTA"; exit 2; }
 
@@ -48,6 +54,17 @@ IMAGEM="$("$OCI" compute image list --compartment-id "$COMPARTMENT" \
 [ -z "$AD" ] || [ -z "$IMAGEM" ] && { log "Nao consegui obter o AD ou a imagem"; exit 1; }
 log "AD: $AD"
 log "Imagem: $IMAGEM"
+
+# A subnet precisa existir, ser visivel para a chave de API e ser publica.
+PRIVADA="$("$OCI" network subnet get --subnet-id "$SUBNET_ID" \
+    --query 'data."prohibit-public-ip-on-vnic"' --raw-output 2>&1)"
+case "$PRIVADA" in
+    false) log "Subnet: ok (publica)." ;;
+    true)  log "A subnet e PRIVADA. Use o OCID da 'public subnet' da VCN."; exit 2 ;;
+    *)     log "Nao consegui ler a subnet. Confira se o SUBNET_ID esta completo e e da mesma regiao:"
+           log "$PRIVADA"
+           exit 2 ;;
+esac
 
 # Nao criar duplicata se uma tentativa anterior ja tiver dado certo.
 EXISTENTE="$("$OCI" compute instance list --compartment-id "$COMPARTMENT" --display-name "$NOME" \
@@ -106,6 +123,11 @@ while true; do
         elif grep -qE "TooManyRequests|\b429\b" <<< "$saida"; then
             log "Tentativa $tentativa: limite de requisicoes, esperando 5 min."
             sleep 300
+        elif grep -qE "NotAuthorizedOrNotFound|InvalidParameter" <<< "$saida"; then
+            # Erro de configuracao: repetir nao resolve.
+            log "Tentativa $tentativa: erro de configuracao, parando:"
+            log "$saida"
+            exit 2
         elif grep -q "LimitExceeded" <<< "$saida"; then
             log "Limite da conta excedido: provavelmente ja existe uma VM A1 usando a cota."
             log "$saida"
