@@ -1,0 +1,61 @@
+# Tenta criar a VM A1 Always Free na Oracle ate conseguir (criar-vm.sh).
+# Cada rodada tenta por 55 minutos; o agendamento dispara uma por hora.
+# Depois que a VM for criada, desative em Actions > Criar VM Oracle > Disable workflow.
+
+name: Criar VM Oracle
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+# Uma rodada por vez: se a anterior ainda estiver rodando, a nova espera.
+concurrency:
+  group: criar-vm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  criar-vm:
+    runs-on: ubuntu-latest
+    # 55 min de tentativas + instalacao + espera a VM ficar RUNNING se der certo.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar OCI CLI
+        run: pipx install oci-cli
+
+      - name: Configurar credenciais
+        env:
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          oci setup repair-file-permissions --file ~/.oci/config
+          oci setup repair-file-permissions --file ~/.oci/oci_api_key.pem
+          printf '%s\n' "$SSH_PUBLIC_KEY" > ~/eduka.pub
+
+      - name: Tentar criar a VM
+        env:
+          OCI: oci
+          SUBNET_ID: ${{ secrets.SUBNET_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          MAX_MINUTOS: "55"
+          OCULTAR_IP: "1"
+        run: bash criar-vm.sh
